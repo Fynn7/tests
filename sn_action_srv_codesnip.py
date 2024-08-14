@@ -16,7 +16,8 @@ class Node:
 class SchedulerNode(Node):
     def __init__(self) -> None:
         ...
-        self.succeeded = True  # NOTE: initially set to True for the 1. process step
+        self.process_succeed = True  # NOTE: initially set to True for the 1. process step
+        self.wait_for_success = False
         ...
 
     def hlc_action_result_callback(self, goal_handle):
@@ -61,15 +62,17 @@ class SchedulerNode(Node):
                 self.get_logger().info("Goal successfully canceled from client.")
                 return get_result(success=False)
 
-            if self.succeeded:  # if the previous process step was successful, execute the next one
+            if self.process_succeed:  # if the previous process step was successful, execute the next one
                 publish_processstep()
-                self.succeeded = False
+                self.process_succeed = False
+            else:
+                time.sleep(1)
+                self.get_logger().info("Waiting for the result of the process step...")
+                continue # if the previous process step was not successful, wait for the result
             # Fetch the result from the result from scheduler node: Error/Success
             # TODO: inside processstep_callback(), set a global var to sign `self.succeed` if it is successful or not
             time.sleep(1)
-            self.get_logger().info("Waiting for the result of the process step...")
-            time.sleep(1)
-            if self.succeeded:  # basically when gui, rpi, scheduler nodes are all ready...
+            if self.process_succeed:  # basically when gui, rpi, scheduler nodes are all ready...
                 publish_success()  # it must be done here in action server, not in `processstep_callback()`
                 # must be done here in action server, not in `processstep_callback()`
                 requested_processstep += 1
