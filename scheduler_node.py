@@ -308,7 +308,7 @@ class SchedulerNode(Node):
         self.get_logger().info(
             f"server successfully created at {self.hlc_action_server}")
 
-        self.gui_rpi_scheduler_ready = False
+        self.process_succeed = True
 
     def goal_callback(self, goal_request):
         '''
@@ -332,6 +332,7 @@ class SchedulerNode(Node):
             55: 22,
             56: 23
         }
+
         feedback_msg = HLC.Feedback()
         feedback_msg.finished_at = -1
         requested_processstep = FP_MAPPER[goal_handle.request.function_id]
@@ -341,22 +342,18 @@ class SchedulerNode(Node):
             result.success = success
             return result
 
-        def feedback_epoch():
-            self.processstep = requested_processstep
-            # error occured while processstep
-            if not self.processstep_callback(ProcessStep(processstep=requested_processstep)):
-                goal_handle.abort()
-                return 1
+        def publish_processstep():
+            msg = ProcessStep()
+            msg.origin = "SchedulerNode"
+            msg.processstep = requested_processstep
+            self.processstep_publisher_.publish(msg)
 
-            time.sleep(1)
+        def publish_success():
+            msg = ProcessStep()
+            msg.origin = "SchedulerNode"
+            msg.processstep = self.processstep
+            self.processstepsuccess_publisher_.publish(msg)
 
-            self.get_logger().info(
-                f"Finished processstep {requested_processstep}")
-            feedback_msg.finished_at = requested_processstep
-            goal_handle.publish_feedback(feedback_msg)
-            return 0
-
-        # feedback loop
         # Endzustände
         while requested_processstep not in {3, 5, 6, 20, 21, 22, 23}:
             self.processstep = requested_processstep
@@ -365,33 +362,24 @@ class SchedulerNode(Node):
                 self.get_logger().info("Goal successfully canceled from client.")
                 return get_result(success=False)
 
-            # Publish ProcessStep
-            msg = ProcessStep()
-            msg.origin = "SchedulerNode"
-            msg.processstep = requested_processstep
-            self.processstep_publisher_.publish(msg)
-
-            if feedback_epoch():  # error occured
-                return get_result(success=False)
-
-            # Publish ProcessStepSuccess
-            msgsuccess = ProcessStep()
-            msgsuccess.origin = "SchedulerNode"
-            msgsuccess.processstep = self.processstep
-            self.processstepsuccess_publisher_.publish(msgsuccess)
-            # self.get_logger().info('Finished Processstep and publish it: "%d".' % msgsuccess.processstep)
-            if self.gui_rpi_scheduler_ready:
+            if self.succeeded:  # if the previous process step was successful, execute the next one
+                publish_processstep()
+                self.succeeded = False
+            # Fetch the result from the result from scheduler node: Error/Success
+            # TODO: inside processstep_callback(), set a global var to sign `self.succeed` if it is successful or not
+            time.sleep(1)
+            self.get_logger().info("Waiting for the result of the process step...")
+            time.sleep(1)
+            if self.succeeded:  # basically when gui, rpi, scheduler nodes are all ready...
+                publish_success()  # it must be done here in action server, not in `processstep_callback()`
+                # must be done here in action server, not in `processstep_callback()`
                 requested_processstep += 1
-                self.gui_rpi_scheduler_ready = False  # werte zurücksetzen
 
-        if feedback_epoch():
-            return get_result(success=False)
         goal_handle.succeed()
         self.get_logger().info("Goal succeeded")
 
-        self.gui_rpi_scheduler_ready = False  # werte zurücksetzen
-
         return get_result(success=True)
+
 
     def cancel_callback(self, goal_handle):
         '''
