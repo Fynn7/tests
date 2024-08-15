@@ -28,7 +28,6 @@ from controller_manager_msgs.srv import SwitchController
 from ur_dashboard_msgs.srv import GetRobotMode, GetSafetyMode, GetProgramState
 
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
-# from hlc_action_interfaces.action import HLC
 from hmi_cobotank_interfaces.action import HLC
 
 
