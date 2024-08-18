@@ -20,15 +20,15 @@ from std_msgs.msg import Bool
 from rcl_interfaces.srv import GetParameters, SetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue
 
-# from pymoveit2 import MoveIt2
-# from pymoveit2.robots import ur10e #vermutlich, weil pymoveit2 mit --merge-install --symlink-install gebuildet werden soll!
+from pymoveit2 import MoveIt2
+from pymoveit2.robots import ur10e #vermutlich, weil pymoveit2 mit --merge-install --symlink-install gebuildet werden soll!
 
 from controller_manager_msgs.srv import SwitchController
 from ur_dashboard_msgs.srv import GetRobotMode, GetSafetyMode, GetProgramState
 
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
-from hlc_action_interfaces.action import HLC
-
+#from hlc_action_interfaces.action import HLC
+from hmi_cobotank_interfaces.action import HLC
 
 class SchedulerNode(Node):
 
@@ -36,15 +36,26 @@ class SchedulerNode(Node):
         super().__init__('scheduler_node')
 
         # Variablen definieren
-        self.estop_rpi = False
         self.estop_visual = False
         self.estop_robot = False
+        self.error_state = False
         self.processstep = -1
         self.processstepsuccess_gui = -1
         self.processstepsuccess_rpi = -1
+        self.processstepsuccess_rpi_handgriff = -1
         self.processstepsuccess_scheduler = -1
         self.confirm = 0
         self.manualguidance = False
+        self.WRONG_STRING_SWITCH_CONTROLLER = False    #"WARNING: got wrong controller_string in switch_controller()"
+        self.FAILURE_STRING_SWITCH_CONTROLLER = False  # Failure while switching controllers! Stop execution
+        self.GET_SERVICE_ROBOT_MODE = False             #'Failed to get response: Service Robot Mode 
+        self.GET_SERVICE_SAFE_MODE = False             #'Failed to get response: Service Safe Mode 
+        self.MOVE_ROBOT = False                         # "WARNING: got wrong pose_string in move_robot()"
+        self.GET_SERVICE_PROGRAM_STATE = False          # Failed to get response Program State
+        self.SET_IO = False                             # Failed to set UR digital output
+        self.PROCESSING_CALLBACK = False   
+
+
 
         self.whichProgramrunning = True
         self.whichMode = 7
@@ -108,33 +119,33 @@ class SchedulerNode(Node):
             "start_pose",
             [
                 0.0,
-                -1.658,
-                1.658,
+                -2.61799,
+                2.61799,
                 0.0,
                 0.0,
                 0.0,
             ],
         )
         self.declare_parameter(
-            "get_hose_pose",
-            [
-                -1.24389,
-                -0.94998,
-                1.61792,
-                0.92851,
-                1.56538,
-                0.28536,
-            ],
-        )
+           "get_hose_pose",
+           [
+               0.0,
+               -1.5708,
+               1.5708,
+               0.0,
+               0.0,
+               0.0,
+           ],
+       )
         self.declare_parameter(
             "handover_pose",
             [
-                1.658,
-                -1.658,
-                1.658,
-                0.0,
-                0.0,
-                0.0,
+                -0.0113,
+                -1.9288,
+                2.2109,
+                -0.566,
+                1.5128,
+                0.0274,
             ],
         )
 
@@ -145,15 +156,15 @@ class SchedulerNode(Node):
         # Callback-Group für EStop und alles bzgl. Safety
         safe_group = MutuallyExclusiveCallbackGroup()
 
-        # # Create MoveIt 2 interface
-        # self.moveit2 = MoveIt2(
-        #     node=self,
-        #     joint_names=ur10e.joint_names(),
-        #     base_link_name=ur10e.base_link_name(),
-        #     end_effector_name=ur10e.end_effector_name(),
-        #     group_name=ur10e.MOVE_GROUP_ARM,
-        #     callback_group=moveit_callback_group,
-        # )
+        # Create MoveIt 2 interface
+        self.moveit2 = MoveIt2(
+            node=self,
+            joint_names=ur10e.joint_names(),
+            base_link_name=ur10e.base_link_name(),
+            end_effector_name=ur10e.end_effector_name(),
+            group_name=ur10e.MOVE_GROUP_ARM,
+            callback_group=moveit_callback_group,
+        )
 
         # EStop-Visual Publisher:
         self.estop_visual_publisher_ = self.create_publisher(
@@ -192,57 +203,57 @@ class SchedulerNode(Node):
             EStop, 'EStop_RPi', self.estop_rpi_callback, 10, callback_group=safe_group)
         self.subscrEStop_RPi  # prevent unused variable warning
 
-        # # Service-client für LEDs, Subscription zu robot mode, safe mode und programmrunning
-        # self.Set_IO_Survice = '/io_and_status_controller/set_io'
-        # self.set_io_client = self.create_client(SetIO, self.Set_IO_Survice)
-        # while not self.set_io_client.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().info('Waiting for %s service...' % self.Set_IO_Survice)
+        # Service-client für LEDs, Subscription zu robot mode, safe mode und programmrunning
+        self.Set_IO_Survice = '/io_and_status_controller/set_io'
+        self.set_io_client = self.create_client(SetIO, self.Set_IO_Survice)
+        while not self.set_io_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for %s service...' % self.Set_IO_Survice)
 
-        # # Client für Service-Anfrage an UR_Driver
-        # self.Get_Switch_client = self.create_client(SwitchController, '/controller_manager/switch_controller', callback_group = moveit_callback_group)
-        # while not self.Get_Switch_client.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().info('service not available, waiting again...')
-        # self.request_switch_Controller = SwitchController.Request()
+        # Client für Service-Anfrage an UR_Driver
+        self.Get_Switch_client = self.create_client(SwitchController, '/controller_manager/switch_controller', callback_group = moveit_callback_group)
+        while not self.Get_Switch_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+        self.request_switch_Controller = SwitchController.Request()
 
-        # #Call the service get root mode
-        # self.Get_Robot_Mode = '/dashboard_client/get_robot_mode'
-        # self.get_Robot_Mode_client = self.create_client(GetRobotMode, self.Get_Robot_Mode, callback_group=moveit_callback_group)
-        # while not self.get_Robot_Mode_client.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().info('Waiting for %s service...' % self.Get_Robot_Mode)
-        # self.request_Robot_Mode = GetRobotMode.Request()
+        #Call the service get root mode
+        self.Get_Robot_Mode = '/dashboard_client/get_robot_mode'
+        self.get_Robot_Mode_client = self.create_client(GetRobotMode, self.Get_Robot_Mode, callback_group=moveit_callback_group)
+        while not self.get_Robot_Mode_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for %s service...' % self.Get_Robot_Mode)
+        self.request_Robot_Mode = GetRobotMode.Request()
 
-        # #Call the service get safe mode
-        # self.Get_Safe_Mode = '/dashboard_client/get_safety_mode'
-        # self.get_Safe_Mode_client = self.create_client(GetSafetyMode, self.Get_Safe_Mode, callback_group=moveit_callback_group)
-        # while not self.get_Safe_Mode_client.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().info('Waiting for %s service...' % self.Get_Safe_Mode)
-        # self.request_Safe_Mode = GetSafetyMode.Request()
+        #Call the service get safe mode
+        self.Get_Safe_Mode = '/dashboard_client/get_safety_mode'
+        self.get_Safe_Mode_client = self.create_client(GetSafetyMode, self.Get_Safe_Mode, callback_group=moveit_callback_group)
+        while not self.get_Safe_Mode_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for %s service...' % self.Get_Safe_Mode)
+        self.request_Safe_Mode = GetSafetyMode.Request()
 
-        # #Call the service get pragram state
-        # self.Get_Program_State = '/dashboard_client/program_state'
-        # self.get_Program_State_client = self.create_client(GetProgramState, self.Get_Program_State, callback_group=moveit_callback_group)
-        # while not self.get_Program_State_client.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().info('Waiting for %s service...' % self.Get_Program_State)
-        # self.request_Program_State = GetProgramState.Request()
+        #Call the service get pragram state
+        self.Get_Program_State = '/dashboard_client/program_state'
+        self.get_Program_State_client = self.create_client(GetProgramState, self.Get_Program_State, callback_group=moveit_callback_group)
+        while not self.get_Program_State_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for %s service...' % self.Get_Program_State)
+        self.request_Program_State = GetProgramState.Request()
 
-        # #/cartesian_force_controller/get_parameters rcl_interfaces/srv/GetParameters
-        # self.get_Parameters = '/cartesian_force_controller/get_parameters'
-        # self.get_Parameters_client = self.create_client(GetParameters, self.get_Parameters, callback_group=moveit_callback_group)
-        # while not self.get_Parameters_client.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().info('Waiting for %s service...' % self.Get_Parameters)
-        # self.request_Parameters = GetParameters.Request()
+        #/cartesian_force_controller/get_parameters rcl_interfaces/srv/GetParameters
+        self.get_Parameters = '/cartesian_force_controller/get_parameters'
+        self.get_Parameters_client = self.create_client(GetParameters, self.get_Parameters, callback_group=moveit_callback_group)
+        while not self.get_Parameters_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for %s service...' % self.get_Parameters)
+        self.request_Parameters = GetParameters.Request()
 
-        # self.setParameter_client = self.create_client(SetParameters, '/cartesian_force_controller/set_parameters') #is it just get_parameters
-        # while not self.setParameter_client.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().info('Waiting for service...')
-        # self.setParameter_request = SetParameters.Request()
+        self.setParameter_client = self.create_client(SetParameters, '/cartesian_force_controller/set_parameters') #is it just get_parameters
+        while not self.setParameter_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for service...')
+        self.setParameter_request = SetParameters.Request()
 
-        # ## Service-Client for setting error scale to server '/cartesian_force_controller/get_parameters'
-        # self.set_error_scale_server_name = '/cartesian_force_controller/set_parameters' # server name
-        # self.set_error_scale_client = self.create_client(SetParameters, self.set_error_scale_server_name) # !! brauchen wir hier einen callback_group?
-        # while not self.set_error_scale_client.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().info('Waiting for %s service...' % self.set_error_scale_server_name)
-        # self.request_error_scale = SetParameters.Request()
+        ## Service-Client for setting error scale to server '/cartesian_force_controller/get_parameters'
+        self.set_error_scale_server_name = '/cartesian_force_controller/set_parameters' # server name
+        self.set_error_scale_client = self.create_client(SetParameters, self.set_error_scale_server_name) # !! brauchen wir hier einen callback_group?
+        while not self.set_error_scale_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for %s service...' % self.set_error_scale_server_name)
+        self.request_error_scale = SetParameters.Request()
 
         # EStop Timer
         estop_timer_period = 0.1  # seconds
@@ -270,7 +281,6 @@ class SchedulerNode(Node):
             Bool, '/io_and_status_controller/robot_program_running', self.robot_programrunning_callback, 10)
         self.robot_program_running_subscription  # prevent unused variable warning
 
-        # action server for processsteps: 0-3,4-5,6,7-20,21,22,23
         self.hlc_action_server = ActionServer(
             self,
             HLC,
@@ -304,40 +314,27 @@ class SchedulerNode(Node):
         }
         feedback_msg = HLC.Feedback()
         feedback_msg.finished_at = -1
-        requested_processstep = FP_MAPPER[goal_handle.request.function_id]
+        self.processstep = FP_MAPPER[goal_handle.request.function_id]
 
         def get_result(success: bool):
             result = HLC.Result()
             result.success = success
             return result
 
-        def feedback_epoch():
-            self.processstep = requested_processstep
-            # error occured while processstep
-            if not self.processstep_callback(ProcessStep(processstep=requested_processstep)):
-                goal_handle.abort()
-                return 1
+        while self.processstep not in {3, 5, 6, 20, 21, 22, 23}:
+            time.sleep(2)
 
-            time.sleep(1)
-
-            self.get_logger().info(
-                f"Finished processstep {requested_processstep}")
-            feedback_msg.finished_at=requested_processstep
-            goal_handle.publish_feedback(feedback_msg)
-            return 0
-
-        # feedback loop
-        while requested_processstep not in {3, 5, 6, 20, 21, 22, 23}: # Endzustände
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
                 self.get_logger().info("Goal successfully canceled from client.")
+                self.process_succeed = False
+                self.running_step = False
                 return get_result(success=False)
-            if feedback_epoch(): # error occured
-                return get_result(success=False)
-            requested_processstep += 1
 
-        if feedback_epoch():
-            return get_result(success=False)
+
+            ... # TODO
+
+
         goal_handle.succeed()
         self.get_logger().info("Goal succeeded")
         return get_result(success=True)
@@ -475,13 +472,13 @@ class SchedulerNode(Node):
         else:
             self.get_logger().error('Failure while switching controllers! Stop execution')
         #    self.Error_Array.append(2)
-            return 2
+            # return 2
 
     def move_robot(self, pose_string):
 
         # Scale down velocity and acceleration of joints (percentage of maximum)
-        self.moveit2.max_velocity = 0.5
-        self.moveit2.max_acceleration = 0.5
+        self.moveit2.max_velocity = 0.2
+        self.moveit2.max_acceleration = 0.2
 
         # Get parameter
         if pose_string == 'start_pose':
@@ -514,7 +511,7 @@ class SchedulerNode(Node):
             self.estop_robot = True
 
         # self.get_logger().info('EStop-States: RPi: "%s", Robot: "%d", Visual: "%d".' % (self.estop_rpi, self.estop_robot, self.estop_visual))
-        if ((self.estop_robot == True or self.estop_rpi == True) and self.estop_visual == False):
+        if ((self.estop_robot == True or self.error_state == True) and self.estop_visual == False):
             # Ein Not-Halt wurde gedrückt, aber noch nicht behandelt!!
 
             # TODO:
@@ -524,12 +521,23 @@ class SchedulerNode(Node):
             msg = EStop()
             msg.origin = "SchedulerNode"
             msg.estop = self.estop_visual
-            self.estop_visual_publisher_.publish(msg)
-            self.get_logger().info('Publishing EStop-Visual: "%s".' % msg.estop)
+            #msg.wrong_string_switch_controller = True
+               
+            for error_name in self.Which_Error:
 
-        elif (self.estop_robot == False and self.estop_rpi == False and self.estop_visual == True):
+                self.get_logger().info('Publishing EStop-Visual: "%s".' % error_name)
+                error_name_s = print(error_name.islower())
+                self.get_logger().info('Publishing EStop-Visual: "%s".' % error_name_s)
+
+                setattr(msg, 'error_name_s', True)
+
+                self.get_logger().info('Publishing EStop-Visual: "%s".' % msg.wrong_string_switch_controller)
+                self.estop_visual_publisher_.publish(msg)
+                self.get_logger().info('Publishing EStop-Visual: "%s".' % msg.estop)
+
+        elif (self.estop_robot == False and self.estop_visual == True):
             # Beide Not-Halt sind wieder raus, die Änderung wurde aber noch nicht an GUI und Roboter weitergeleitet
-
+            pass
             # TO def set_ur_digital_output(self, index: int , value: bool):DO:
             # Bewegung des Roboters fortsetzen
             self.estop_visual = False
@@ -552,14 +560,14 @@ class SchedulerNode(Node):
         # Turn off the previous LED if it was set
         if self.previous_index is not None:
             request.pin = self.previous_index
-            request.state = 0.0
+            request.state = 1.0
             self.set_io_client.call_async(request).result()
 
         request.pin = index
         if value == True:
-            request.state = float(1)
-        elif value == False:
             request.state = float(0)
+        elif value == False:
+            request.state = float(1)
 
         # Update the previous index
         self.previous_index = index
@@ -567,7 +575,7 @@ class SchedulerNode(Node):
         future = self.set_io_client.call(request)
         # self.get_logger().error(f'UNknown error setting error scale parameter: {future}')
 
-        time.sleep(2)
+        time.sleep(1)
 
         # if the function work do nothing if not return 8
         if future.success == True:
@@ -593,99 +601,103 @@ class SchedulerNode(Node):
         self.estop_rpi = msg.estop
 
     def processstep_callback(self, msg: ProcessStep):
+        Success = False
         self.get_logger().info('Starting ProcessStep: "%d".' % msg.processstep)
         self.processstep = msg.processstep
 
-        # if self.processstep == 0:
+        if self.processstep == 0:
 
-        #     # TODO:
+            # TODO:
 
-        #     # Abfrage, ob Roboterzustände richtig: SafeMode, RobotMode und Programmrunning
-        #     # Falls noch nicht richtig, dann Meldung im Terminal und nach 2 sek erneut abfragen
+            # Abfrage, ob Roboterzustände richtig: SafeMode, RobotMode und Programmrunning
+            # Falls noch nicht richtig, dann Meldung im Terminal und nach 2 sek erneut abfragen
 
-        #     self.Error_Array.append(self.Get_Service_SAFE_Mode())
-        #     self.get_logger().info('ProcessStep: I heard from Safe Mode, it is safe.' )
+            self.Error_Array.append(self.Get_Service_SAFE_Mode())
+            self.get_logger().info('ProcessStep: I heard from Safe Mode, it is safe.' )
 
-        #     self.Error_Array.append(self.Get_Service_Robot_Mode())
-        #     self.get_logger().info('ProcessStep: I heard from Robot Mode, it is running.' )
+            self.Error_Array.append(self.Get_Service_Robot_Mode())
+            self.get_logger().info('ProcessStep: I heard from Robot Mode, it is running.' )
 
-        #     self.Error_Array.append(self.Get_Service_Program_State())
-        #     self.get_logger().info('ProcessStep: I heard from Program State, it is playing.' )
+            self.Error_Array.append(self.Get_Service_Program_State())
+            self.get_logger().info('ProcessStep: I heard from Program State, it is playing.' )
 
-        #     self.Error_Array.append(self.Get_Parameters('processstep_manualconfirm'))
-        #     self.get_logger().info('ProcessStep: I heard from Get_Parameters, the parameters from RPi_Node' )
+            self.Error_Array.append(self.Get_Parameters('processstep_manualconfirm'))
+            self.get_logger().info('ProcessStep: I heard from Get_Parameters, the parameters from RPi_Node' )
 
-        #     # Bei Meustart nach Fehler und deaktiviertem Trajectory controller müsste her erstmal der Controller gewechselt werden!!
-        #     # Hierzu muss aber erstmal erkannt werden, dass der falsche Controller aktiv ist. Diese Abfrage hier einfügen?
-        #     #self.Error_Array.append(self.switch_controller("scaled_joint_trajectory_controller"))
+            # Bei Meustart nach Fehler und deaktiviertem Trajectory controller müsste her erstmal der Controller gewechselt werden!!
+            # Hierzu muss aber erstmal erkannt werden, dass der falsche Controller aktiv ist. Diese Abfrage hier einfügen?
+            #self.Error_Array.append(self.switch_controller("scaled_joint_trajectory_controller"))
 
-        #     self.Error_Array.append(self.move_robot("start_pose"))
-        #     self.get_logger().info('Moving Robot to start pose.' )
+            self.Error_Array.append(self.move_robot("start_pose"))
+            self.get_logger().info('Moving Robot to start pose.' )
 
-        #     # Warnleuchte am UR auf "Kollaboration"
-        #     self.Error_Array.append(self.set_ur_digital_output(0, True))
+            # Warnleuchte am UR auf "Kollaboration"
+            self.Error_Array.append(self.set_ur_digital_output(0, True))
 
-        # elif self.processstep == 1:
-        #     # Warnleuchte am UR auf "Kollaboration"
-        #     self.Error_Array.append(self.set_ur_digital_output(0, True))
-        # elif self.processstep == 4:
-        #     self.Error_Array.append(self.move_robot("get_hose_pose"))
-        #     time.sleep(3)
-        #     self.Error_Array.append(self.move_robot("start_pose"))
+        elif self.processstep == 1:
+            # Warnleuchte am UR auf "Kollaboration"
+            self.Error_Array.append(self.set_ur_digital_output(0, True))
 
-        # elif self.processstep == 5:
-        #     # Warnleuchte am UR auf "Automatisch"
-        #     self.Error_Array.append(self.set_ur_digital_output(1, True))
 
-        # elif self.processstep == 6:
-        #     self.Error_Array.append(self.move_robot("handover_pose"))
-        #     self.Error_Array.append(self.switch_controller("cartesian_force_controller"))
+        elif self.processstep == 4:
+            self.Error_Array.append(self.move_robot("get_hose_pose"))
+            time.sleep(3)
+            self.Error_Array.append(self.move_robot("start_pose"))
 
-        # elif self.processstep == 7:
-        #     # DANN Warnleuchte am UR auf "Kollaboration"
-        #     self.Error_Array.append(self.set_ur_digital_output(0, True))
+        elif self.processstep == 5:
+            # Warnleuchte am UR auf "Automatisch"
+            self.Error_Array.append(self.set_ur_digital_output(1, True))
 
-        # elif self.processstep == 20:
-        #     # Warnleuchte am UR auf "Automatisch"
-        #     self.Error_Array.append(self.switch_controller("scaled_joint_trajectory_controller"))
-        #     self.Error_Array.append(self.set_ur_digital_output(1, True))
+        elif self.processstep == 6:
+            self.Error_Array.append(self.move_robot("handover_pose"))
+            self.Error_Array.append(self.switch_controller("cartesian_force_controller"))
 
-        # elif self.processstep == 21:
-        #     self.Error_Array.append(self.move_robot("start_pose"))
+        elif self.processstep == 7:
+            # DANN Warnleuchte am UR auf "Kollaboration"
+            self.Error_Array.append(self.set_ur_digital_output(0, True))
 
-        # elif self.processstep == 22:
-        #     self.Error_Array.append(self.move_robot("get_hose_pose"))
-        #     time.sleep(3)
-        #     self.Error_Array.append(self.move_robot("start_pose"))
+        elif self.processstep == 20:
+            # Warnleuchte am UR auf "Automatisch"
+            self.Error_Array.append(self.switch_controller("scaled_joint_trajectory_controller"))
+            self.Error_Array.append(self.set_ur_digital_output(1, True))
 
-        # #check the error_array for errors
-        # for error_value in self.Error_Array:
-        #     if error_value == None:
-        #         Success= True
+        elif self.processstep == 21:
+            self.Error_Array.append(self.move_robot("start_pose"))
 
-        #     else: # publich auf Error topic und sagt welche problem
-        #         #self.get_logger().info(f"Received message from topic error Mode: {self.Error_Array}")
-        #         Success = False
-        #         self.get_logger().error('ERROR: Failure in processstep_callback!')
-        #         self.Error_Array.append(10) # There is an error in  processstep callback add 10
+        elif self.processstep == 22:
+            self.Error_Array.append(self.move_robot("get_hose_pose"))
+            time.sleep(3)
+            self.Error_Array.append(self.move_robot("start_pose"))
 
-        #         #self.get_logger().info(f"Received message from topic error Mode: {self.Error_Array}")
+        #check the error_array for errors
+        for error_value in self.Error_Array:
+            if error_value == None:
+                Success= True
 
-        #         self.get_logger().info(f"Received message from topic error Mode: {self.error_name[error_value]}")
-        #         self.Error_Array = [] # empty the Error_Array
+            else: # publich auf Error topic und sagt welche problem
+                #self.get_logger().info(f"Received message from topic error Mode: {self.Error_Array}")
+                Success = False
+                self.get_logger().error('ERROR: Failure in processstep_callback!')
+                self.Error_Array.append(10) # There is an error in  processstep callback add 10
 
-        # if Success == True:
-        #     # Publish ProcessStepSuccess
-        #     msgsuccess = ProcessStep()
-        #     msgsuccess.origin = "SchedulerNode"
-        #     msgsuccess.processstep = self.processstep
-        #     self.processstepsuccess_publisher_.publish(msgsuccess)
-        #     #self.get_logger().info('Finished Processstep and publish it: "%d".' % msgsuccess.processstep)
-        Success = True
-        return Success
+                #self.get_logger().info(f"Received message from topic error Mode: {self.Error_Array}")
+
+                self.get_logger().info(f"Received message from topic error Mode: {self.error_name[error_value]}")
+                self.Error_Array = [] # empty the Error_Array
+
+        if Success == True:
+            # Publish ProcessStepSuccess
+            msgsuccess = ProcessStep()
+            msgsuccess.origin = "SchedulerNode"
+            msgsuccess.processstep = self.processstep
+            self.processstepsuccess_publisher_.publish(msgsuccess)
+            self.get_logger().info("Finished Processstep and publish it")
+
+
 
     def processstepsuccess_callback(self, msg: ProcessStep):
         # self.get_logger().info('ProcessStepSuccess: I heard from "%s": "%d".' % (msg.origin, msg.processstep))
+        
         if msg.origin == "GUINode":
             self.processstepsuccess_gui = msg.processstep
             self.get_logger().info('ProcessStepSuccess_GUI: "%d".' %
@@ -703,6 +715,10 @@ class SchedulerNode(Node):
             if self.processstep == 14:
                 time.sleep(5)
                 self.get_logger().info('Processstep 14: Waiting 5 seconds.')
+            if self.processstep == 21:
+                time.sleep (5)
+                self.get_logger().info('Processstep 21: Waiting 5 seconds.')
+
             self.processstep = self.processstep + 1
 
             # neuen Prozessschritt publishen
@@ -710,9 +726,8 @@ class SchedulerNode(Node):
             msg_processtep.origin = "SchedulerNode"
             msg_processtep.processstep = self.processstep
             self.processstep_publisher_.publish(msg_processtep)
-            self.get_logger().info('All Nodes finished. Automatically starting Processstep "%s".' %
-                                   msg_processtep.processstep)
-
+            
+    
     def manualguidance_callback(self, msg: ManualGuidance):
         '''
         frequently called
@@ -741,11 +756,11 @@ class SchedulerNode(Node):
 
             self.get_logger().info('User confirmed with Button')
 
-            if (self.processstep == self.processstepsuccess_gui == self.processstepsuccess_rpi == self.processstepsuccess_scheduler) and (self.processstep in self.processstep_manualconfirm):
-
-                self.processstep = self.processstep + 1
+            if (self.processstep == self.processstepsuccess_gui == self.processstepsuccess_rpi == self.processstepsuccess_rpi_handgriff == self.processstepsuccess_scheduler) and (self.processstep in self.processstep_manualconfirm):
+                self.get_logger().info('Finished Processstep and publish it3 : "%d".' % self.processstep)
+                #self.processstep = self.processstep + 1
                 # Am Ende des Prozesses von vorne beginnen:
-                if self.processstep == 24:
+                if self.processstep == 23:
                     self.processstep = 1
 
                 # neuen Prozessschritt publishen
