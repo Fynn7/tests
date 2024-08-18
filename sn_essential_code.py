@@ -14,7 +14,11 @@ class ActionServer:
 
 
 class HLC:
-    ...
+    class Feedback:
+        ...
+
+    class Result:
+        ...
 
 
 class GoalResponse:
@@ -42,9 +46,15 @@ class SchedulerNode(Node):
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback
         )
-
+        self.processstep = -1
+        self.processstepsuccess_gui = -1
+        self.processstepsuccess_rpi = -1
+        self.processstepsuccess_scheduler = -1
         self.process_succeed = False
         self.running_step = False
+
+    def get_logger(self):
+        ...
 
     def goal_callback(self, goal_request):
         '''
@@ -124,13 +134,6 @@ class SchedulerNode(Node):
         self.get_logger().info("Goal succeeded")
 
         return get_result(success=True)
-
-    def cancel_callback(self, goal_handle):
-        '''
-        Callback function for the cancel request
-        '''
-        self.get_logger().info("Canceling goal")
-        return CancelResponse.ACCEPT
 
     def processstep_callback(self, msg: ProcessStep):
         Success = False
