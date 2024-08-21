@@ -302,6 +302,7 @@ class SchedulerNode(Node):
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback
         )
+        self.prev_step_succeed = True  # prevent repeated call of the same processstep
 
     def goal_callback(self, goal_request):
         '''
@@ -317,13 +318,13 @@ class SchedulerNode(Node):
         Callback function for the action server
         '''
         FP_MAPPER = {
-            50: 0,
-            51: 4,
-            52: 6,
-            53: 7,
-            54: 21,
-            55: 22,
-            56: 23
+            50: -1,
+            51: 3,
+            52: 5,
+            53: 6,
+            54: 20,
+            55: 21,
+            56: 22
         }
         feedback_msg = HLC.Feedback()
         feedback_msg.finished_at = -1
@@ -336,18 +337,25 @@ class SchedulerNode(Node):
 
         while self.processstep not in {3, 5, 6, 20, 21, 22, 23}:
             time.sleep(2)
-
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
                 self.get_logger().info("Goal successfully canceled from client.")
-                self.process_succeed = False
-                self.running_step = False
                 return get_result(success=False)
 
-            ...  # TODO
+            if self.prev_step_succeed:
+                self.processstep += 1
+                self.get_logger().info("Action Server publishing step: %d" % self.processstep)
+                msg = ProcessStep()
+                msg.origin = "SchedulerNode"
+                msg.processstep = self.processstep
+                self.processstep_publisher_.publish(msg)
+                self.prev_step_succeed = False
 
+        while not self.prev_step_succeed:
+            self.get_logger().info("Waiting for LAST step of this phase to succeed...")
+            time.sleep(0.5)
         goal_handle.succeed()
-        self.get_logger().info("Goal succeeded")
+        self.get_logger().info("Goal succeeded for function_id: %d" % goal_handle.request.function_id)
         return get_result(success=True)
 
     def cancel_callback(self, goal_handle):
@@ -734,13 +742,12 @@ class SchedulerNode(Node):
                 time.sleep(5)
                 self.get_logger().info('Processstep 21: Waiting 5 seconds.')
 
-            self.processstep = self.processstep + 1
-
-            # neuen Prozessschritt publishen
-            msg_processtep = ProcessStep()
-            msg_processtep.origin = "SchedulerNode"
-            msg_processtep.processstep = self.processstep
-            self.processstep_publisher_.publish(msg_processtep)
+            # # neuen Prozessschritt publishen
+            # msg_processtep = ProcessStep()
+            # msg_processtep.origin = "SchedulerNode"
+            # msg_processtep.processstep = self.processstep
+            # self.processstep_publisher_.publish(msg_processtep)
+            self.prev_step_succeed = True
 
     def manualguidance_callback(self, msg: ManualGuidance):
         '''
