@@ -61,6 +61,7 @@ class SchedulerNode(Node):
         self.GET_SERVICE_PROGRAM_STATE = False
         self.SET_IO = False                             # Failed to set UR digital output
         self.PROCESSING_CALLBACK = False
+        # self.succeeded = True
 
         self.whichProgramrunning = True
         self.whichMode = 7
@@ -294,6 +295,8 @@ class SchedulerNode(Node):
             Bool, '/io_and_status_controller/robot_program_running', self.robot_programrunning_callback, 10)
         self.robot_program_running_subscription  # prevent unused variable warning
 
+        # action server for processsteps: 0-3,4-5,6,7-20,21,22,23
+
         self.hlc_action_server = ActionServer(
             self,
             HLC,
@@ -302,7 +305,7 @@ class SchedulerNode(Node):
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback
         )
-        self.prev_step_succeed = True  # prevent repeated call of the same processstep
+        self.prev_step_succeed = True
 
     def goal_callback(self, goal_request):
         '''
@@ -342,6 +345,14 @@ class SchedulerNode(Node):
                 self.get_logger().info("Goal successfully canceled from client.")
                 return get_result(success=False)
 
+            # if self.processstep == 0 and self.prev_step_succeed:
+            #     self.get_logger().info("Action Server publishing step: %d" % self.processstep)
+            #     msg = ProcessStep()
+            #     msg.origin = "SchedulerNode"
+            #     msg.processstep = self.processstep
+            #     self.processstep_publisher_.publish(msg)
+            #     self.prev_step_succeed = False
+
             if self.prev_step_succeed:
                 self.processstep += 1
                 self.get_logger().info("Action Server publishing step: %d" % self.processstep)
@@ -355,7 +366,8 @@ class SchedulerNode(Node):
             self.get_logger().info("Waiting for LAST step of this phase to succeed...")
             time.sleep(0.5)
         goal_handle.succeed()
-        self.get_logger().info("Goal succeeded for function_id: %d" % goal_handle.request.function_id)
+        self.get_logger().info("Goal succeeded for function_id: %d" %
+                               goal_handle.request.function_id)
         return get_result(success=True)
 
     def cancel_callback(self, goal_handle):
@@ -716,7 +728,9 @@ class SchedulerNode(Node):
             msgsuccess.origin = "SchedulerNode"
             msgsuccess.processstep = self.processstep
             self.processstepsuccess_publisher_.publish(msgsuccess)
-            self.get_logger().info("Finished Processstep and publish it")
+            # self.get_logger().info('Finished Processstep and publish it: "%d".' % msgsuccess.processstep)
+       # Success = True
+       # return Success
 
     def processstepsuccess_callback(self, msg: ProcessStep):
         # self.get_logger().info('ProcessStepSuccess: I heard from "%s": "%d".' % (msg.origin, msg.processstep))
@@ -742,11 +756,16 @@ class SchedulerNode(Node):
                 time.sleep(5)
                 self.get_logger().info('Processstep 21: Waiting 5 seconds.')
 
-            # # neuen Prozessschritt publishen
+            # self.succeeded = True
+            # self.processstep = self.processstep + 1
+
+            # neuen Prozessschritt publishen
             # msg_processtep = ProcessStep()
             # msg_processtep.origin = "SchedulerNode"
             # msg_processtep.processstep = self.processstep
             # self.processstep_publisher_.publish(msg_processtep)
+            # self.get_logger().info('All Nodes finished. Automatically starting Processstep "%s".' %
+            #                        msg_processtep.processstep)
             self.prev_step_succeed = True
 
     def manualguidance_callback(self, msg: ManualGuidance):
@@ -778,7 +797,7 @@ class SchedulerNode(Node):
             self.get_logger().info('User confirmed with Button')
             if (self.processstep == self.processstepsuccess_gui == self.processstepsuccess_rpi == self.processstepsuccess_scheduler) and (self.processstep in self.processstep_manualconfirm):
 
-            # if (self.processstep == self.processstepsuccess_gui == self.processstepsuccess_rpi == self.processstepsuccess_rpi_handgriff == self.processstepsuccess_scheduler) and (self.processstep in self.processstep_manualconfirm):
+                # if (self.processstep == self.processstepsuccess_gui == self.processstepsuccess_rpi == self.processstepsuccess_rpi_handgriff == self.processstepsuccess_scheduler) and (self.processstep in self.processstep_manualconfirm):
                 self.get_logger().info('Finished Processstep and publish it3 : "%d".' %
                                        self.processstep)
                 # self.processstep = self.processstep + 1
@@ -792,6 +811,7 @@ class SchedulerNode(Node):
                 msg_processtep.processstep = self.processstep
                 self.processstep_publisher_.publish(msg_processtep)
                 # self.get_logger().info('Publishing Processstep: "%s".' % msg_processtep.processstep)
+                self.prev_step_succeed = True
 
             elif self.processstep == -1:
                 # Erstmaliger Prozessstart
@@ -806,6 +826,9 @@ class SchedulerNode(Node):
                 msg_processtep.processstep = self.processstep
                 self.processstep_publisher_.publish(msg_processtep)
                 # self.get_logger().info('Publishing Processstep: "%s".' % msg_processtep.processstep)
+            else:
+                self.get_logger().info(
+                    f"ps: {self.processstep} gui{self.processstepsuccess_gui} rpi:{self.processstepsuccess_rpi} scheduelr{self.processstepsuccess_scheduler} handgriff{self.processstepsuccess_rpi_handgriff}manualconfirm{self.manualconf}")
 
 
 def main(args=None):
