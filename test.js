@@ -35,9 +35,10 @@ function waitForElement(selector) {
 
 for (let page = 1; page <= 14; page++) {
   next_page =
-    "https://moodle.uni-due.de/user/index.php?contextid=4046857&id=48250&perpage=20&page=" +
-    page;
-  for (let c = 0; c <= 20; c++) {
+    "https://moodle.uni-due.de/user/index.php?contextid=4046857&id=48250&perpage=20&page=" +toString(page);
+  console.log("start this page: " + page);
+  console.log("page url: " + next_page);
+    for (let c = 0; c <= 20; c++) {
     // Adjust the range as needed
     let ids = "user-index-participants-48250_r" + c;
     let selector = 'td[id^="' + ids + '_c1"]';
